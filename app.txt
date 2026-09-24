@@ -1,0 +1,150 @@
+from flask import Flask, render_template_string, request, redirect, session
+import datetime
+app = Flask(__name__)
+app.secret_key = 'tanga_v4_gerant'
+
+CODE_GERANT = "1234"
+CODE_VENDEUR = "0000"
+
+produits = [
+    {"id":1,"nom":"RIZ","sku":"RIZ25","achat":2500,"vente":3000,"stock":50,"seuil":10},
+    {"id":2,"nom":"Boisson sucrée","sku":"BOIS12","achat":800,"vente":1200,"stock":3,"seuil":5},
+    {"id":3,"nom":"Savon","sku":"SAV01","achat":500,"vente":800,"stock":25,"seuil":5},
+]
+factures = []
+
+BASE = """
+<!DOCTYPE html><html><head><meta name="viewport" content="width=device-width, initial-scale=1">
+<link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+<style>body{background:#f0f2f5}.sidebar{background:#1e293b;min-height:100vh;color:white;padding-top:20px}
+.sidebar a{color:#cbd5e1;text-decoration:none;display:block;padding:12px 20px;margin:4px 10px;border-radius:8px}.sidebar a.active{background:#334155;color:white}
+.topbar{background:white;padding:15px;border-bottom:1px solid #e2e8f0}.kpi{background:white;border-radius:12px;padding:20px;box-shadow:0 1px 3px rgba(0,0,0,0.1)}
+.locked{background:#fef2f2;border:2px dashed #ef4444;padding:20px;text-align:center;border-radius:12px}
+</style></head><body>
+<div class="container-fluid"><div class="row">
+<div class="col-2 sidebar">
+<h6 class="px-3">TANGA STOCK PRO</h6>
+<span class="px-3 badge {% if session.role=='gerant' %}bg-success{% else %}bg-warning text-dark{% endif %}">{{ session.role|upper }} - {{ session.user }}</span><br><br>
+<a href="/dashboard" class="{{'active' if page=='dash' else ''}}">📊 Vente</a>
+<a href="/produits" class="{{'active' if page=='prod' else ''}}">📦 Inventaire {% if session.role!='gerant' %}🔒{% endif %}</a>
+<a href="/factures" class="{{'active' if page=='fact' else ''}}">🧾 Factures</a>
+<a href="/logout">🚪 Quitter</a>
+<div class="p-3 mt-4" style="background:#0f172a;border-radius:10px"><small>Rôle: {{session.role}}<br>Prix: BLOQUÉ pour vendeur<br>Calcul: AUTO</small></div>
+</div>
+<div class="col-10 p-0"><div class="topbar d-flex justify-content-between"><b>Boutique Marie - Lushi</b><span>Code Gérant: 1234 | Vendeur: 0000</span></div>
+<div class="p-4">{{ content|safe }}</div></div></div></div></body></html>
+"""
+
+def render_page(page, content):
+    return render_template_string(BASE, page=page, content=content)
+
+@app.route('/', methods=['GET','POST'])
+def login():
+    if request.method=='POST':
+        code = request.form['code']
+        if code == CODE_GERANT:
+            session['role']='gerant'; session['user']='Gérant Marie'; return redirect('/dashboard')
+        elif code == CODE_VENDEUR:
+            session['role']='vendeur'; session['user']='Vendeur'; return redirect('/dashboard')
+        else:
+            return "<h3>Code faux!</h3><p>Gérant=1234 / Vendeur=0000</p><a href='/'>Retour</a>"
+    return """
+    <!DOCTYPE html><html><head><meta name="viewport" content="width=device-width, initial-scale=1">
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <style>body{background:#f0f2f5;display:flex;justify-content:center;align-items:center;height:100vh}.box{background:white;padding:35px;border-radius:16px;width:350px;box-shadow:0 10px 30px rgba(0,0,0,0.1)}</style></head><body>
+    <div class="box text-center"><h4 style="color:#1e40af">TANGA STOCK</h4><p>Accès sécurisé</p>
+    <form method="POST"><input name="code" type="password" class="form-control form-control-lg mb-3" placeholder="Entrez votre CODE PIN" required>
+    <button class="btn btn-primary w-100">Entrer / Ingia</button></form>
+    <hr><small><b>Démo:</b><br>Gérant: 1234 (tout accès)<br>Vendeur: 0000 (vente seule)</small></div></body></html>
+    """
+
+@app.route('/dashboard', methods=['GET','POST'])
+def dash():
+    if 'role' not in session: return redirect('/')
+    if request.method=='POST':
+        pid = int(request.form['produit'])
+        qte = int(request.form['qte'])
+        p = next((x for x in produits if x['id']==pid), None)
+        if p and p['stock']>=qte:
+            p['stock']-=qte
+            total = p['vente']*qte
+            fid = f"FAC-00{len(factures)+1}"
+            factures.append({"id":fid,"client":request.form['client'],"tel":request.form['tel'],"total":total,"date":datetime.datetime.now().strftime("%d/%m/%Y"),"status":"Payé","produit":f"{p['nom']} x{qte} @ {p['vente']} FC"})
+            return redirect(f'/facture/{fid}')
+    opts = "".join([f"<option value='{p['id']}' data-prix='{p['vente']}' data-stock='{p['stock']}'>{p['nom']} - {p['vente']} FC (Stock:{p['stock']})</option>" for p in produits])
+    c = f"""
+    <div class="kpi"><h4>🛒 Nouvelle Vente - Prix BLOQUÉ (comme tu voulais)</h4>
+    <p class="text-muted">Le vendeur ne peut PAS changer le prix. Calcul auto Qté x Prix fixe.</p>
+    <form method="POST" class="row g-3 mt-2">
+    <div class="col-6"><label>Client</label><input name="client" class="form-control" placeholder="MOISE MWENGE" required></div>
+    <div class="col-6"><label>Tel WhatsApp</label><input name="tel" class="form-control" placeholder="099..." required></div>
+    <div class="col-6"><label>Produit (prix fixé par gérant)</label><select id="prod" name="produit" class="form-control" required onchange="calc()">{opts}</select></div>
+    <div class="col-3"><label>Quantité</label><input id="qte" name="qte" type="number" value="1" min="1" class="form-control" oninput="calc()" required></div>
+    <div class="col-3"><label>Total Auto</label><input id="total_display" class="form-control" style="background:#e0f2fe;font-weight:bold" readonly><small id="stock_info"></small></div>
+    <div class="col-12"><button class="btn btn-primary w-100 p-3">✅ Vendre & Générer Facture PDF</button></div>
+    </form></div>
+    <script>
+    function calc(){{
+        let sel=document.getElementById('prod'); let opt=sel.options[sel.selectedIndex];
+        let prix=parseInt(opt.getAttribute('data-prix')); let qte=parseInt(document.getElementById('qte').value||1);
+        let stock=parseInt(opt.getAttribute('data-stock'));
+        document.getElementById('total_display').value = (prix*qte) + ' FC';
+        document.getElementById('stock_info').innerHTML = stock>=qte ? '<span style=color:green>Stock OK: '+stock+'</span>' : '<span style=color:red>Stock insuffisant! '+stock+' restant</span>';
+    }} calc();
+    </script>
+    """
+    return render_page('dash', c)
+
+@app.route('/produits', methods=['GET','POST'])
+def prod_list():
+    if 'role' not in session: return redirect('/')
+    # Si vendeur tente d'accéder, demande code gérant
+    if session['role']!='gerant' and not session.get('gerant_unlocked'):
+        if request.method=='POST' and request.form.get('code_gerant')==CODE_GERANT:
+            session['gerant_unlocked']=True
+        else:
+            c = f"""
+            <div class="locked"><h3>🔒 INVENTAIRE BLOQUÉ</h3><p>Seul le Gérant peut voir/modifier les prix et stock.<br>Demandez le code gérant.</p>
+            <form method="POST" style="max-width:300px;margin:auto"><input name="code_gerant" type="password" class="form-control mb-2" placeholder="Code Gérant (1234)" required><button class="btn btn-danger w-100">Débloquer Inventaire</button></form>
+            <p class="mt-3"><a href="/dashboard">← Retour à la vente</a></p></div>
+            """
+            return render_page('prod', c)
+    
+    if request.method=='POST' and session['role']=='gerant':
+        # Gérant ajoute produit avec prix fixe
+        produits.append({"id":len(produits)+1,"nom":request.form['nom'],"sku":request.form['sku'],"achat":int(request.form['achat']),"vente":int(request.form['vente']),"stock":int(request.form['stock']),"seuil":int(request.form['seuil'])})
+    
+    table = "".join([f"<tr><td>{p['sku']}</td><td>{p['nom']}</td><td><span class='badge bg-{'danger' if p['stock']<=p['seuil'] else 'success'}'>{p['stock']}</span></td><td>{p['achat']} FC</td><td><b>{p['vente']} FC</b> <small>(FIXE)</small></td><td>{p['vente']-p['achat']} FC</td><td>{'<button class=btn btn-sm btn-outline-primary>Modifier Prix (Gérant)</button>' if session['role']=='gerant' else '<span class=text-muted>🔒 Bloqué</span>'}</td></tr>" for p in produits])
+    form_gerant = """
+    <div class="kpi mt-3"><h6>➕ Ajouter Produit (Gérant seulement) - Prix Fixé</h6>
+    <form method="POST" class="row g-2"><div class="col-3"><input name="nom" class="form-control" placeholder="Nom" required></div><div class="col-2"><input name="sku" class="form-control" placeholder="SKU"></div>
+    <div class="col-2"><input name="achat" type="number" class="form-control" placeholder="Achat"></div><div class="col-2"><input name="vente" type="number" class="form-control" placeholder="Vente FIXE"></div>
+    <div class="col-1"><input name="stock" type="number" class="form-control" placeholder="Stock"></div><div class="col-2"><button class="btn btn-success w-100">Fixer Prix</button></div></form></div>
+    """ if session['role']=='gerant' else "<div class='alert alert-warning mt-3'>Tu es en mode VENDEUR - Tu ne peux pas modifier les prix. Demande au gérant.</div>"
+    
+    c = f"<div class='kpi'><h4>📦 Inventaire - Prix Fixés par Gérant</h4><table class='table mt-3'><tr><th>SKU</th><th>Nom</th><th>Stock</th><th>Achat</th><th>Vente FIXE</th><th>Marge</th><th>Action</th></tr>{table}</table></div>{form_gerant}"
+    return render_page('prod', c)
+
+@app.route('/factures')
+def facts():
+    if 'role' not in session: return redirect('/')
+    rows = "".join([f"<tr><td>{f['id']}</td><td>{f['client']}</td><td>{f['produit']}</td><td>{f['total']} FC</td><td><a href='/facture/{f['id']}' class='btn btn-sm btn-dark'>PDF</a></td></tr>" for f in factures])
+    return render_page('fact', f"<div class='kpi'><h4>Factures</h4><table class='table mt-3'><tr><th>N°</th><th>Client</th><th>Détail (Qté x Prix Fixe)</th><th>Total Auto</th><th>PDF</th></tr>{rows}</table></div>")
+
+@app.route('/facture/<fid>')
+def facture(fid):
+    f = next((x for x in factures if x['id']==fid), None)
+    if not f: return "Non trouvé"
+    return f"""<!DOCTYPE html><html><head><link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <style>body{{background:#eee}}.paper{{background:white;max-width:700px;margin:20px auto;padding:40px}}</style></head><body>
+    <div class="text-center p-3"><a href="/dashboard" class="btn btn-secondary">Retour</a> <button onclick="window.print()" class="btn btn-primary">Imprimer PDF</button></div>
+    <div class="paper"><div class="d-flex justify-content-between"><div><h3 style="color:#1e40af">TANGA STOCK</h3><small>Boutique Marie</small></div><div class="text-end"><h4>FACTURE {f['id']}</h4>{f['date']}</div></div><hr>
+    <p><b>Client:</b> {f['client']} - {f['tel']}<br><b>Détail:</b> {f['produit']} (Prix fixé par gérant - calcul auto)</p>
+    <h5 class="text-end">Total: {f['total']} FC</h5><small class="text-muted">Prix fixe - Vendeur ne peut pas modifier - Calcul automatique Qté x Prix</small></div></body></html>"""
+
+@app.route('/logout')
+def logout(): session.clear(); return redirect('/')
+
+if __name__=='__main__':
+    print("TANGA V4 - Gerant 1234 / Vendeur 0000 - http://127.0.0.1:5000")
+    app.run(debug=False)
